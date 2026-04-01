@@ -1,0 +1,76 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: subscribers
+    // Fields:
+    //   - email: string (required, email format)
+    //   - createdAt: timestamp (required)
+    //
+    // Collection: users
+    // Fields:
+    //   - uid: string (required)
+    //   - email: string (required, email format)
+    //   - displayName: string (optional)
+    //   - photoURL: string (optional)
+    //   - createdAt: timestamp (required)
+    //
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    // Domain Validators
+    function isValidSubscriber(data) {
+      return hasOnlyAllowedFields(['email', 'createdAt']) &&
+             isValidEmail(data.email) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidUser(data) {
+      return hasOnlyAllowedFields(['uid', 'email', 'displayName', 'photoURL', 'createdAt', 'forgeConfig']) &&
+             data.uid == request.auth.uid &&
+             isValidEmail(data.email) &&
+             data.createdAt is timestamp &&
+             (!('forgeConfig' in data) || (
+               data.forgeConfig is map &&
+               data.forgeConfig.keys().hasOnly(['backendUrl', 'heroToken']) &&
+               (!('backendUrl' in data.forgeConfig) || data.forgeConfig.backendUrl is string) &&
+               (!('heroToken' in data.forgeConfig) || data.forgeConfig.heroToken is string)
+             ));
+    }
+
+    // Rules
+    match /subscribers/{subscriberId} {
+      // Anyone can subscribe, but only once (if we wanted to enforce uniqueness, we'd use email as ID)
+      // For simplicity, we allow create if valid.
+      allow create: if isValidSubscriber(request.resource.data);
+      // Only admins should read subscribers (for now, deny all reads)
+      allow read, update, delete: if false;
+    }
+
+    match /users/{userId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isOwner(userId) && isValidUser(request.resource.data);
+      allow delete: if false;
+    }
+  }
+}
